@@ -9,19 +9,41 @@ export const errorHandler = (
   res: Response,
   next: NextFunction,
 ) => {
+  let formattedErrors = [];
   if (err instanceof RequestValidationError) {
+    const formattedErrors = err.errors.map((error) => {
+      if (error.type === "field") {
+        return {
+          message: error.msg,
+          field: error.path,
+        };
+      }
+
+      return {
+        message: error.msg,
+      };
+    });
+
     return res.status(400).send({
-      reason: [...err.errors],
+      errors: formattedErrors,
     });
   }
 
   if (err instanceof DatabaseConnectionError) {
-    return res.status(400).send({
-      reason: err.reason,
+    return res.status(500).send({
+      errors: [
+        {
+          message: err.reason,
+        },
+      ],
     });
   }
 
-  res.status(400).send({
-    message: "Something went wrong",
+  res.status(500).send({
+    errors: [
+      {
+        message: "Something went wrong",
+      },
+    ],
   });
 };
