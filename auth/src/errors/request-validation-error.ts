@@ -1,14 +1,16 @@
 import type { ValidationError } from "express-validator";
+import { CustomError } from "./custom-error.js";
 
-export class RequestValidationError extends Error {
+export class RequestValidationError extends CustomError {
   statusCode = 400;
+
   constructor(public errors: ValidationError[]) {
-    super();
+    super("Invalid request parameters");
     // because we are extending a  javascript built-in calss
     Object.setPrototypeOf(this, RequestValidationError.prototype);
   }
 
-  serilizeError() {
+  serializeErrors() {
     return this.errors.map((error) => {
       if (error.type === "field") {
         return {
