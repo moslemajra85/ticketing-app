@@ -26,3 +26,6 @@ Thumbs.db
 
 # Local Kubernetes helper files
 *.kubeconfig
+
+# Local learning notes and course material
+auth/learning/
