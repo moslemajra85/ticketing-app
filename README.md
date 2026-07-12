@@ -1,298 +1,335 @@
-# Ticketing App
+# Ticketing — Microservices Learning Platform
 
-A learning-focused microservices ticketing application built with Node.js, Express, TypeScript, Docker, Kubernetes, Minikube, Ingress NGINX, and Skaffold.
+> A production-minded ticket marketplace built incrementally to explore service boundaries, container orchestration, data ownership, and reliable distributed-system design.
 
-The current project starts with an `auth` service and the local infrastructure needed to run it inside a Kubernetes cluster. The goal is to learn production-style service boundaries and deployment mechanics while building the app incrementally.
+[![TypeScript](https://img.shields.io/badge/TypeScript-6.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-Alpine-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![Kubernetes](https://img.shields.io/badge/Kubernetes-Minikube-326CE5?logo=kubernetes&logoColor=white)](https://kubernetes.io/)
+[![Docker](https://img.shields.io/badge/Docker-Containerized-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![Project status](https://img.shields.io/badge/status-active%20development-orange)](#project-status)
 
-## Current Architecture
+## Why This Project Exists
+
+Ticketing is an evolving backend for a marketplace where users will be able to list tickets and purchase tickets listed by other users. The business idea is intentionally straightforward; the engineering challenge is building it as a collection of independently deployable services without losing correctness when data and workflows cross service boundaries.
+
+The project is being used to develop practical experience with:
+
+- defining a clear responsibility and database boundary for each service;
+- packaging TypeScript services as Docker images;
+- deploying and networking workloads inside Kubernetes;
+- exposing multiple services through one Ingress entry point;
+- automating the local build/deploy feedback loop with Skaffold;
+- evolving authentication, event-driven communication, consistency, testing, and observability in deliberate stages.
+
+This repository currently delivers the first vertical slice: an **authentication service backed by its own MongoDB instance**, deployed to a local Kubernetes cluster.
+
+## Project Status
+
+> **Active development / learning project.** The infrastructure foundation and signup persistence flow are implemented. This is not yet a complete marketplace or a production-ready system.
+
+| Capability | Status | Notes |
+|---|---:|---|
+| Auth service and routing | Implemented | Express routes are exposed under `/api/users` |
+| Signup validation | Implemented | Email format and password length are validated |
+| User persistence | Implemented | Users are stored in the auth-owned MongoDB database |
+| Password hashing | Implemented | Passwords are salted and hashed with Node.js `scrypt` before storage |
+| Signin, signout, current user | Scaffolded | Routes exist; business logic and HTTP responses remain to be implemented |
+| Local Kubernetes deployment | Implemented | Deployments, Services, Ingress, and Skaffold workflow are present |
+| Automated tests | Not started | A test runner and test suites still need to be added |
+| Tickets, orders, expiration, payments | Planned | These services are part of the target architecture, not the current repository |
+
+## Current System Design
+
+The deployed system has one public entry point. Ingress NGINX routes user-related requests to a stable Kubernetes Service. That Service selects the current auth Pod, and the auth application accesses MongoDB through a separate internal Service.
 
 ```mermaid
-flowchart TD
-  A[Browser or API client] --> B[Ingress NGINX]
-  B --> C[Ingress rule<br/>ticketing.dev/api/users]
-  C --> D[auth-srv Service]
-  D --> E[auth Pod]
-  E --> F[auth container]
-  F --> G[Express TypeScript app<br/>port 3000]
+flowchart LR
+    Client[Browser or API client]
 
-  H[Skaffold] --> I[Build Docker image<br/>mossajross/auth]
-  H --> J[Apply Kubernetes YAML]
-  I --> E
-  J --> C
-  J --> D
-  J --> E
+    subgraph Cluster[Minikube Kubernetes cluster]
+        Ingress[Ingress NGINX<br/>ticketing.dev]
+        AuthService[auth-srv<br/>ClusterIP :3000]
+
+        subgraph AuthBoundary[Auth service boundary]
+            AuthPod[auth Pod<br/>Node.js + Express + TypeScript]
+            MongoService[auth-mongo-srv<br/>ClusterIP :27017]
+            Mongo[(Auth MongoDB<br/>auth database)]
+        end
+    end
+
+    Client -->|HTTPS /api/users/*| Ingress
+    Ingress -->|route by path| AuthService
+    AuthService -->|load balance to matching Pod| AuthPod
+    AuthPod -->|Mongoose / MongoDB protocol| MongoService
+    MongoService -->|forward to database Pod| Mongo
 ```
 
-Request flow:
+### What the diagram means
 
-```txt
-https://ticketing.dev/api/users/currentuser
-  -> /etc/hosts maps ticketing.dev to Minikube
-  -> Ingress NGINX receives the request
-  -> Ingress routes /api/users traffic to auth-srv
-  -> auth-srv forwards to an auth Pod
-  -> Express handles the route
+- **Client → Ingress:** `ticketing.dev` is the single external address used during local development.
+- **Ingress → `auth-srv`:** requests matching `/api/users/*` are routed to the auth Kubernetes Service.
+- **`auth-srv` → auth Pod:** the Service gives clients a stable address even when Kubernetes replaces a Pod.
+- **auth Pod → `auth-mongo-srv`:** the application never depends on a temporary database Pod IP.
+- **MongoDB:** authentication data is owned by the auth boundary. Future services should not read this database directly.
+
+The current manifests run one application Pod and one non-persistent MongoDB Pod. This is appropriate for local learning, but it does **not** provide production durability or high availability.
+
+## Signup Request Flow
+
+The signup endpoint is the first implemented end-to-end business path.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client
+    participant Ingress as Ingress NGINX
+    participant AuthSvc as auth-srv
+    participant Auth as Auth application
+    participant Mongo as Auth MongoDB
+
+    Client->>Ingress: POST /api/users/signup<br/>{ email, password }
+    Ingress->>AuthSvc: Match /api/users/*
+    AuthSvc->>Auth: Forward request to auth Pod
+    Auth->>Auth: Validate email and password
+    Auth->>Mongo: Find user by email
+    alt User already exists
+        Mongo-->>Auth: Existing user
+        Auth-->>Client: 400 validation-style error
+    else New user
+        Mongo-->>Auth: No matching user
+        Auth->>Auth: Generate salt and hash password with scrypt
+        Auth->>Mongo: Save user document
+        Mongo-->>Auth: Persisted user
+        Auth-->>Client: 201 Created
+    end
 ```
 
-## Repository Structure
+This flow keeps validation and identity rules inside the auth service. The password hashing hook runs in the model before a modified password is saved, which prevents route handlers from accidentally persisting plain-text credentials.
 
-```txt
-.
-├── auth/
-│   ├── Dockerfile
-│   ├── package.json
-│   ├── package-lock.json
+## Design Decisions
+
+### Database per service
+
+The auth service owns its MongoDB database. This prevents future services from coupling themselves to auth's internal schema and allows the auth service to evolve independently. The trade-off is that future cross-service workflows cannot rely on database joins or shared transactions; they will require explicit APIs or events.
+
+### Kubernetes Service in front of each workload
+
+Pods are replaceable and receive temporary network addresses. A Kubernetes Service provides stable discovery and forwards traffic to Pods selected by labels. Both the application and database use this pattern.
+
+### Ingress as the public boundary
+
+Clients should not need to know which internal service handles a request. Ingress centralizes host/path routing while internal Services remain private to the cluster. As new HTTP services are added, new route prefixes can be mapped at this boundary.
+
+### Shared errors are intentionally local for now
+
+The auth service has typed application errors and one error-handling middleware. Extracting a shared package before a second service exists would add publishing and versioning complexity without proven reuse. A shared library becomes justified when another service needs the same stable contract.
+
+## Technology Choices
+
+| Area | Technology | Responsibility |
+|---|---|---|
+| Language | TypeScript | Static checks and explicit application contracts |
+| Runtime/API | Node.js, Express 5 | HTTP routing and middleware pipeline |
+| Validation | `express-validator` | Request-level validation for auth endpoints |
+| Data | MongoDB, Mongoose | Auth-owned document persistence and model hooks |
+| Credential security | Node.js `crypto.scrypt` | Salted password hashing and comparison |
+| Packaging | Docker | Reproducible service image |
+| Orchestration | Kubernetes via Minikube | Local workload scheduling, discovery, and routing |
+| Edge routing | Ingress NGINX | Host- and path-based entry point |
+| Developer workflow | Skaffold | Build, deploy, log streaming, and source synchronization |
+
+## Repository Map
+
+```text
+ticketing-app/
+├── auth/                         # Authentication microservice
 │   ├── src/
-│   │   ├── index.ts
-│   │   ├── routes/
-│   │   ├── middlewares/
-│   │   └── errors/
-│   └── tsconfig.json
-├── infra/
-│   └── k8s/
-│       ├── auth-depl.yaml
-│       └── ingress-srv.yaml
+│   │   ├── errors/               # Typed operational HTTP errors
+│   │   ├── middlewares/          # Central Express error translation
+│   │   ├── models/               # Mongoose user model and save hook
+│   │   ├── routes/               # /api/users route handlers
+│   │   ├── services/             # Password hashing/comparison logic
+│   │   └── index.ts              # App composition, DB connection, server startup
+│   ├── Dockerfile                # Auth development image
+│   ├── package.json              # Dependencies and npm scripts
+│   └── tsconfig.json             # Strict TypeScript configuration
+├── infra/k8s/
+│   ├── auth-depl.yaml            # Auth Deployment and ClusterIP Service
+│   ├── auth-mongo-depl.yaml      # MongoDB Deployment and ClusterIP Service
+│   └── ingress-srv.yaml          # ticketing.dev /api/users routing rule
 ├── docs/
-│   └── infrastructure-guide.md
-├── skaffold.yaml
-├── .gitignore
-└── README.md
+│   ├── infrastructure-guide.md   # Docker/Kubernetes concepts and walkthrough
+│   └── system-architecture.md    # Living architecture reference
+├── skaffold.yaml                 # Local build/deploy/sync configuration
+└── README.md                     # Project overview and portfolio landing page
 ```
 
-## Important Files
+## API Surface
 
-`auth/Dockerfile`
+| Method | Route | Current behavior |
+|---|---|---|
+| `POST` | `/api/users/signup` | Validates input, rejects a duplicate email, hashes the password, and creates a user |
+| `POST` | `/api/users/signin` | Route exists; implementation is pending |
+| `POST` | `/api/users/signout` | Route exists; implementation is pending |
+| `GET` | `/api/users/currentuser` | Route exists; implementation is pending |
 
-Builds the Docker image for the auth service.
+Signup request example:
 
-`infra/k8s/auth-depl.yaml`
+```bash
+curl --insecure \
+  --request POST \
+  https://ticketing.dev/api/users/signup \
+  --header 'Content-Type: application/json' \
+  --data '{"email":"engineer@example.com","password":"securepass"}'
+```
 
-Defines the auth Kubernetes Deployment and Service.
+`--insecure` is needed only for the local HTTPS setup because it does not use a publicly trusted production certificate.
 
-`infra/k8s/ingress-srv.yaml`
+## Run Locally with Kubernetes
 
-Defines the Ingress route that sends `/api/users` traffic to the auth service.
+### Prerequisites
 
-`skaffold.yaml`
+Install and verify:
 
-Automates the local Kubernetes development loop: build image, apply manifests, stream logs, and sync changed TypeScript files.
-
-`docs/infrastructure-guide.md`
-
-Detailed learning notes explaining Docker, Kubernetes, Ingress NGINX, Skaffold, and the YAML files.
-
-## Prerequisites
-
-Install these tools on Ubuntu:
-
-- Node.js and npm
 - Docker
-- kubectl
+- `kubectl`
 - Minikube
 - Skaffold
 
-Check them with:
-
 ```bash
-node --version
-npm --version
 docker --version
 kubectl version --client
 minikube version
 skaffold version
 ```
 
-## Local Service Development Without Kubernetes
-
-Use this when you only want to run the auth service directly.
-
-```bash
-cd auth
-npm install
-npm start
-```
-
-The auth service runs with:
-
-```bash
-tsx watch src/index.ts
-```
-
-Type-check the service:
-
-```bash
-cd auth
-npm run typecheck
-```
-
-## Kubernetes Development With Minikube and Skaffold
-
-Start Minikube:
+### 1. Start the cluster
 
 ```bash
 minikube start --driver=docker
-```
-
-Enable Ingress NGINX:
-
-```bash
 minikube addons enable ingress
 ```
 
-Check cluster health:
+The first command creates a local Kubernetes cluster using Docker. The second installs the NGINX controller that implements the repository's Ingress rules.
 
-```bash
-minikube status
-kubectl get nodes
-kubectl get pods -A
-```
+### 2. Map the development hostname
 
-Map the local development domain to Minikube:
+Get the cluster IP:
 
 ```bash
 minikube ip
 ```
 
-Add the returned IP to `/etc/hosts`:
+Add it to `/etc/hosts` on the host machine:
 
-```txt
+```text
 <minikube-ip> ticketing.dev
 ```
 
-Example:
+For example: `192.168.49.2 ticketing.dev`. This local mapping is machine-specific and must not be committed.
 
-```txt
-192.168.49.2 ticketing.dev
-```
-
-Run the full development loop:
+### 3. Start the development workflow
 
 ```bash
 skaffold dev
 ```
 
-Skaffold will build the auth image, deploy the Kubernetes YAML files, stream logs, and sync TypeScript changes into the running container.
+Skaffold builds `mossajross/auth`, applies every manifest in `infra/k8s`, streams workload logs, and synchronizes TypeScript source changes into the running auth container.
 
-## Useful Kubernetes Commands
-
-Inspect app resources:
+### 4. Verify the deployment
 
 ```bash
-kubectl get pods
-kubectl get services
-kubectl get ingress
-kubectl get deployments
+kubectl get deployments,pods,services,ingress
+curl --insecure https://ticketing.dev/api/users/currentuser
 ```
 
-Debug a Pod:
+The route handler is currently a placeholder, so this request is useful for checking routing but does not yet return current-user data.
 
-```bash
-kubectl describe pod <pod-name>
-kubectl logs <pod-name>
-kubectl exec -it <pod-name> -- sh
-```
+## Development Without Kubernetes
 
-Inspect Ingress routing:
-
-```bash
-kubectl describe ingress ingress-service
-```
-
-Test the auth route through Ingress:
-
-```bash
-curl -k https://ticketing.dev/api/users/currentuser
-```
-
-If `/etc/hosts` is not configured yet, test directly against the Minikube IP:
-
-```bash
-curl -k -H 'Host: ticketing.dev' https://$(minikube ip)/api/users/currentuser
-```
-
-## Auth Service Routes
-
-Current route files live in `auth/src/routes`.
-
-Known routes:
-
-```txt
-GET  /api/users/currentuser
-POST /api/users/signup
-POST /api/users/signin
-POST /api/users/signout
-```
-
-The signup route currently includes request validation and intentionally throws a database connection error while the persistence layer is still being built.
-
-## What Should Be Committed
-
-Commit source code, configuration, and documentation:
-
-```txt
-auth/src/
-auth/Dockerfile
-auth/.dockerignore
-auth/package.json
-auth/package-lock.json
-auth/tsconfig.json
-infra/k8s/
-skaffold.yaml
-docs/
-README.md
-.gitignore
-```
-
-Generated dependencies should not be committed:
-
-```txt
-auth/node_modules/
-```
-
-Local machine configuration should not be committed:
-
-```txt
-/etc/hosts entries
-.env files
-local kubeconfig files
-editor settings
-logs
-build outputs
-```
-
-## Git Hygiene
-
-This repository ignores generated dependency folders and local machine files through `.gitignore`.
-
-If `node_modules` was accidentally committed before `.gitignore` existed, remove it from Git tracking while keeping it locally:
-
-```bash
-git rm -r --cached auth/node_modules
-git commit -m "Remove generated dependencies from repository"
-```
-
-After cloning the project again, recreate dependencies with:
+The auth process expects MongoDB at the Kubernetes DNS name `auth-mongo-srv`, so running only `npm start` outside the cluster is insufficient for persistence. For static verification, you can still install dependencies and run the TypeScript compiler:
 
 ```bash
 cd auth
 npm install
+npm run typecheck
 ```
 
-## Notes
+`npm run typecheck` executes `tsc --noEmit`: it checks the program without generating JavaScript files.
 
-This is still a learning-stage local development setup.
+## Target Architecture
 
-Not production-ready yet:
+The intended marketplace will grow by business capability rather than by technical layer. Each service will own its data and publish facts that other services need, avoiding direct database access across boundaries.
 
-- the Dockerfile runs a watch-mode development command
-- the app has no real database connection yet
-- Kubernetes manifests do not yet define health checks or resource limits
-- HTTPS uses local Ingress behavior, not a production certificate setup
+```mermaid
+flowchart TB
+    Client[Web client] --> Ingress[Ingress / API entry point]
 
-The next production-minded improvements are:
+    Ingress --> Auth[Auth service]
+    Ingress --> Tickets[Tickets service]
+    Ingress --> Orders[Orders service]
+    Ingress --> Payments[Payments service]
 
-- compile TypeScript before running containers
-- add readiness and liveness probes
-- add database-backed auth behavior
-- add shared error-handling utilities as the service count grows
-- add tests for route validation and error handling
+    Auth --> AuthDB[(Auth DB)]
+    Tickets --> TicketsDB[(Tickets DB)]
+    Orders --> OrdersDB[(Orders DB)]
+    Payments --> PaymentsDB[(Payments DB)]
+
+    Auth -. domain events .-> Bus[(Event bus)]
+    Tickets -. domain events .-> Bus
+    Orders -. domain events .-> Bus
+    Payments -. domain events .-> Bus
+    Expiration[Expiration worker] <. events .> Bus
+```
+
+This is a **direction**, not a claim about the current code. An event bus becomes valuable when ticket reservation, order expiration, and payment completion must coordinate without sharing databases. It should be introduced only alongside those workflows, including idempotency, retries, and event-versioning rules.
+
+## Reliability and Security Notes
+
+Implemented safeguards:
+
+- signup inputs are validated before database access;
+- duplicate email addresses are rejected at the application level;
+- passwords are salted and hashed before persistence;
+- expected application failures use a consistent `{ errors: [...] }` response shape;
+- unexpected errors are translated to a generic response instead of exposing an internal stack trace.
+
+Known gaps before production use:
+
+- the user schema does not yet enforce a unique database index on email;
+- signup currently returns the persisted model and should explicitly omit the password hash;
+- there are no sessions/JWTs, authorization rules, rate limits, or abuse controls;
+- the MongoDB workload has no persistent volume, authentication, backup, or replica set;
+- Deployments have no health probes, resource requests/limits, or hardened security contexts;
+- the Docker image runs a watch-mode development process and is not a production build;
+- application configuration such as the MongoDB URL is hard-coded rather than injected;
+- automated tests, CI, structured logs, metrics, and distributed traces are not present.
+
+These gaps are documented deliberately: a production-ready label should follow evidence, not precede it.
+
+## Roadmap
+
+The next useful steps are ordered to strengthen the existing slice before multiplying services:
+
+1. Complete signin, signout, current-user, and cookie/session behavior.
+2. Add route integration tests using an isolated MongoDB test environment.
+3. Prevent credential fields from appearing in API responses and enforce email uniqueness in MongoDB.
+4. Separate Express app construction from process startup to improve testability.
+5. Add production container builds, environment-based configuration, health probes, and resource limits.
+6. Introduce the tickets service with its own database and public route boundary.
+7. Add orders and expiration workflows; introduce an event bus only when asynchronous coordination is required.
+8. Add payments behind an external-provider adapter, followed by idempotency and failure recovery.
+9. Establish CI, observability, secret management, and a production deployment strategy.
+
+## Engineering Documentation
+
+- [System architecture](docs/system-architecture.md) — current resources, responsibilities, and request paths.
+- [Infrastructure guide](docs/infrastructure-guide.md) — an in-depth learning guide to Docker, Kubernetes, Minikube, Ingress NGINX, and Skaffold.
+
+## What This Project Demonstrates
+
+Even at its current stage, the repository demonstrates more than an Express CRUD endpoint. It shows a complete path from validated HTTP input, through application and persistence boundaries, into a containerized service deployed and discovered inside Kubernetes. Just as importantly, it records the limitations and the reasoning behind future architectural steps—because production engineering is as much about knowing what is **not yet guaranteed** as it is about making the happy path work.
+
+## License
+
+No repository-level license has been added yet. Until one is chosen, the source is available for viewing but should not be assumed to grant reuse or redistribution rights.
