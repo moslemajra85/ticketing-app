@@ -38,6 +38,28 @@ This repository currently delivers the first vertical slice: an **authentication
 | Automated tests | Not started | A test runner and test suites still need to be added |
 | Tickets, orders, expiration, payments | Planned | These services are part of the target architecture, not the current repository |
 
+## Product Vision — Concept Mockups
+
+> **These screens are design concepts, not implemented application features.** They illustrate the intended customer experience while the backend and marketplace services are under active development.
+
+### Discover events
+
+![Ticketing marketplace discovery concept](docs/mockups/marketplace-discovery.png)
+
+### Review a ticket listing
+
+![Ticket details and reservation concept](docs/mockups/ticket-details.png)
+
+### Create a listing
+
+![Create a ticket listing concept](docs/mockups/create-listing.png)
+
+### Track an order
+
+![Ticket order status concept](docs/mockups/order-status.png)
+
+The concepts establish a shared visual direction for future frontend work: a deep-navy and warm-neutral palette, accessible violet actions, explicit buyer-protection messaging, and calm status communication without false urgency. Final screens may change as user flows and service contracts are implemented and tested.
+
 ## Current System Design
 
 The deployed system has one public entry point. Ingress NGINX routes user-related requests to a stable Kubernetes Service. That Service selects the current auth Pod, and the auth application accesses MongoDB through a separate internal Service.
