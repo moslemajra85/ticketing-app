@@ -1,12 +1,30 @@
-# Ticketing — Microservices Learning Platform
+<div align="center">
 
-> A production-minded ticket marketplace built incrementally to explore service boundaries, container orchestration, data ownership, and reliable distributed-system design.
+# Ticketing
+
+### A microservices learning platform built around a ticket marketplace
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-6.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-Alpine-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-Minikube-326CE5?logo=kubernetes&logoColor=white)](https://kubernetes.io/)
 [![Docker](https://img.shields.io/badge/Docker-Containerized-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 [![Project status](https://img.shields.io/badge/status-active%20development-orange)](#project-status)
+
+A production-minded backend built incrementally to explore service boundaries, container orchestration, data ownership, and reliable distributed-system design.
+
+</div>
+
+![Ticketing marketplace product-vision concept](docs/mockups/ticketing-marketplace-hero.png)
+
+> **Product-vision concept:** this interface illustrates the intended marketplace experience. The current repository implements the authentication foundation and local Kubernetes infrastructure—not the customer-facing marketplace shown above.
+
+<p align="center">
+  <a href="#project-status">Current status</a> ·
+  <a href="#current-system-design">System design</a> ·
+  <a href="#run-locally-with-kubernetes">Run locally</a> ·
+  <a href="docs/system-architecture.md">Architecture reference</a> ·
+  <a href="docs/infrastructure-guide.md">Infrastructure guide</a>
+</p>
 
 ## Why This Project Exists
 
@@ -42,9 +60,7 @@ This repository currently delivers the first vertical slice: an **authentication
 
 > **These screens are design concepts, not implemented application features.** They illustrate the intended customer experience while the backend and marketplace services are under active development.
 
-### Discover events
-
-![Ticketing marketplace discovery concept](docs/mockups/marketplace-discovery.png)
+The hero image above establishes the event-discovery direction. The following focused screens explore later steps in the planned customer journey.
 
 ### Review a ticket listing
 
